@@ -65,6 +65,21 @@ const HASKELL_TEMPLATES = [
 
 const INITIAL_CODE = HASKELL_TEMPLATES[0].code;
 
+const HASKELL_SUGGESTIONS = [
+  // Keywords
+  'module', 'import', 'where', 'let', 'in', 'case', 'of', 'if', 'then', 'else', 'do', 
+  'type', 'data', 'newtype', 'class', 'instance', 'deriving', 'as', 'qualified', 'hiding',
+  'main', 'return',
+  // Types
+  'Int', 'Integer', 'Float', 'Double', 'Bool', 'Char', 'String', 'IO', 'Maybe', 'Either', 'Ordering',
+  // Functions
+  'putStrLn', 'print', 'getLine', 'read', 'show', 'head', 'tail', 'last', 'init', 'null', 
+  'length', 'reverse', 'map', 'filter', 'foldl', 'foldr', 'zip', 'zipWith', 'take', 'drop', 
+  'splitAt', 'takeWhile', 'dropWhile', 'any', 'all', 'elem', 'notElem', 'sum', 'product', 
+  'maximum', 'minimum', 'concat', 'concatMap', 'words', 'unwords', 'lines', 'unlines',
+  'undefined', 'error', 'otherwise'
+];
+
 // --- Syntax Highlighting Logic ---
 const highlightHaskell = (code: string) => {
   const escape = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
@@ -124,6 +139,10 @@ export default function App() {
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   const [isExplanationOpen, setIsExplanationOpen] = useState(false);
   const [copied, setCopied] = useState(false);
+  const [activeLine, setActiveLine] = useState(0);
+  const [suggestions, setSuggestions] = useState<string[]>([]);
+  const [suggestionIndex, setSuggestionIndex] = useState(0);
+  const [suggestionPos, setSuggestionPos] = useState({ top: 0, left: 0 });
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const lineNumbersRef = useRef<HTMLDivElement>(null);
   const preRef = useRef<HTMLPreElement>(null);
@@ -149,6 +168,148 @@ export default function App() {
   };
 
   const lineCount = code.split('\n').length;
+
+  // Autocomplete Logic
+  useEffect(() => {
+    const textarea = textareaRef.current;
+    if (!textarea) return;
+
+    const handleInput = () => {
+      const cursor = textarea.selectionStart;
+      const textBefore = code.substring(0, cursor);
+      const match = textBefore.match(/(\b[a-zA-Z0-9_']+)$/);
+
+      if (match) {
+        const prefix = match[1];
+        const filtered = HASKELL_SUGGESTIONS.filter(s => 
+          s.startsWith(prefix) && s !== prefix
+        ).slice(0, 10);
+
+        if (filtered.length > 0) {
+          // Calculate position (rough approximation for monospaced font)
+          const lines = textBefore.split('\n');
+          const currentLineIndex = lines.length - 1;
+          const currentColIndex = lines[currentLineIndex].length;
+          
+          setSuggestions(filtered);
+          setSuggestionIndex(0);
+          setSuggestionPos({
+            top: (currentLineIndex + 1) * 24 + 24 - textarea.scrollTop, // 24px is leading-6
+            left: currentColIndex * 8.4 + 56 - textarea.scrollLeft // 56px is line numbers width
+          });
+        } else {
+          setSuggestions([]);
+        }
+      } else {
+        setSuggestions([]);
+      }
+    };
+
+    textarea.addEventListener('input', handleInput);
+    textarea.addEventListener('click', () => {
+      setSuggestions([]);
+      const cursor = textarea.selectionStart;
+      const textBefore = code.substring(0, cursor);
+      setActiveLine(textBefore.split('\n').length - 1);
+    });
+    textarea.addEventListener('keyup', () => {
+      const cursor = textarea.selectionStart;
+      const textBefore = code.substring(0, cursor);
+      setActiveLine(textBefore.split('\n').length - 1);
+    });
+    return () => {
+      textarea.removeEventListener('input', handleInput);
+      textarea.removeEventListener('click', () => setSuggestions([]));
+      textarea.removeEventListener('keyup', () => {});
+    };
+  }, [code]);
+
+  const insertSuggestion = (suggestion: string) => {
+    const textarea = textareaRef.current;
+    if (!textarea) return;
+
+    const cursor = textarea.selectionStart;
+    const textBefore = code.substring(0, cursor);
+    const match = textBefore.match(/(\b[a-zA-Z0-9_']+)$/);
+
+    if (match) {
+      const prefix = match[1];
+      const start = cursor - prefix.length;
+      const newCode = code.substring(0, start) + suggestion + code.substring(cursor);
+      setCode(newCode);
+      setSuggestions([]);
+      
+      // Reset cursor position after state update
+      setTimeout(() => {
+        textarea.focus();
+        const newPos = start + suggestion.length;
+        textarea.setSelectionRange(newPos, newPos);
+      }, 0);
+    }
+  };
+
+  const handleKeyDown = (e: React.KeyboardEvent) => {
+    const textarea = textareaRef.current;
+    if (!textarea) return;
+
+    if (suggestions.length > 0) {
+      if (e.key === 'ArrowDown') {
+        e.preventDefault();
+        setSuggestionIndex(prev => (prev + 1) % suggestions.length);
+        return;
+      } else if (e.key === 'ArrowUp') {
+        e.preventDefault();
+        setSuggestionIndex(prev => (prev - 1 + suggestions.length) % suggestions.length);
+        return;
+      } else if (e.key === 'Tab' || e.key === 'Enter') {
+        e.preventDefault();
+        insertSuggestion(suggestions[suggestionIndex]);
+        return;
+      } else if (e.key === 'Escape') {
+        setSuggestions([]);
+        return;
+      }
+    }
+
+    // Ctrl+Enter or Cmd+Enter to Run
+    if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
+      e.preventDefault();
+      handleRun();
+      return;
+    }
+
+    // Tab support (insert 2 spaces)
+    if (e.key === 'Tab') {
+      e.preventDefault();
+      const start = textarea.selectionStart;
+      const end = textarea.selectionEnd;
+      const newCode = code.substring(0, start) + "  " + code.substring(end);
+      setCode(newCode);
+      setTimeout(() => {
+        textarea.selectionStart = textarea.selectionEnd = start + 2;
+      }, 0);
+    }
+
+    // Auto-indent on Enter
+    if (e.key === 'Enter') {
+      const cursor = textarea.selectionStart;
+      const textBefore = code.substring(0, cursor);
+      const lastLine = textBefore.split('\n').pop() || '';
+      const indentMatch = lastLine.match(/^(\s*)/);
+      const indent = indentMatch ? indentMatch[1] : '';
+      
+      if (indent.length > 0) {
+        e.preventDefault();
+        const start = textarea.selectionStart;
+        const end = textarea.selectionEnd;
+        const newCode = code.substring(0, start) + "\n" + indent + code.substring(end);
+        setCode(newCode);
+        setTimeout(() => {
+          textarea.selectionStart = textarea.selectionEnd = start + 1 + indent.length;
+        }, 0);
+      }
+    }
+  };
 
   // Load saved codes from localStorage
   useEffect(() => {
@@ -344,7 +505,10 @@ export default function App() {
             className="w-14 shrink-0 bg-black/20 py-6 text-right pr-4 font-mono text-[11px] text-slate-600 select-none overflow-hidden border-r border-white/5"
           >
             {Array.from({ length: lineCount }).map((_, i) => (
-              <div key={i} className="h-6 leading-6">{i + 1}</div>
+              <div key={i} className={cn(
+                "h-6 leading-6 transition-colors duration-200",
+                i === activeLine ? "text-cyan-400 font-bold bg-cyan-400/5" : ""
+              )}>{i + 1}</div>
             ))}
           </div>
 
@@ -354,7 +518,7 @@ export default function App() {
             <pre
               ref={preRef}
               aria-hidden="true"
-              className="absolute inset-0 p-6 font-mono text-sm leading-6 pointer-events-none whitespace-pre overflow-hidden"
+              className="absolute inset-0 p-6 font-mono text-sm leading-6 pointer-events-none whitespace-pre-wrap break-words overflow-hidden"
               dangerouslySetInnerHTML={{ __html: highlightHaskell(code) + '\n' }}
             />
             
@@ -364,10 +528,45 @@ export default function App() {
               value={code}
               onChange={(e) => setCode(e.target.value)}
               onScroll={handleScroll}
+              onKeyDown={handleKeyDown}
               spellCheck={false}
-              className="absolute inset-0 w-full h-full p-6 bg-transparent font-mono text-sm leading-6 focus:outline-none resize-none text-transparent caret-cyan-400 whitespace-pre overflow-auto"
+              className="absolute inset-0 w-full h-full p-6 bg-transparent font-mono text-sm leading-6 focus:outline-none resize-none text-transparent caret-cyan-400 whitespace-pre-wrap break-words overflow-auto"
               placeholder="-- Digite seu código Haskell aqui..."
             />
+
+            {/* Autocomplete Dropdown */}
+            <AnimatePresence>
+              {suggestions.length > 0 && (
+                <motion.div
+                  initial={{ opacity: 0, y: -10 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  exit={{ opacity: 0, y: -10 }}
+                  style={{ 
+                    top: suggestionPos.top, 
+                    left: suggestionPos.left,
+                    position: 'absolute'
+                  }}
+                  className="z-50 min-w-[160px] bg-[#1a1b26] border border-white/10 rounded-xl shadow-2xl overflow-hidden backdrop-blur-xl"
+                >
+                  {suggestions.map((s, i) => (
+                    <button
+                      key={s}
+                      onClick={() => insertSuggestion(s)}
+                      onMouseEnter={() => setSuggestionIndex(i)}
+                      className={cn(
+                        "w-full text-left px-4 py-2 text-xs font-mono transition-colors flex items-center justify-between",
+                        i === suggestionIndex ? "bg-indigo-500 text-white" : "text-slate-300 hover:bg-white/5"
+                      )}
+                    >
+                      <span>{s}</span>
+                      <span className="text-[9px] opacity-50 uppercase tracking-tighter">
+                        {HASKELL_SUGGESTIONS.indexOf(s) < 21 ? 'keyword' : HASKELL_SUGGESTIONS.indexOf(s) < 32 ? 'type' : 'func'}
+                      </span>
+                    </button>
+                  ))}
+                </motion.div>
+              )}
+            </AnimatePresence>
             
             {/* Floating Actions */}
             <div className="absolute top-6 right-6 flex flex-col gap-2 opacity-0 group-hover:opacity-100 transition-all translate-x-2 group-hover:translate-x-0">
@@ -403,12 +602,17 @@ export default function App() {
                 <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
                 System Ready
               </div>
+              <div className="hidden md:flex items-center gap-2 text-[10px] font-mono text-slate-600">
+                <kbd className="px-1.5 py-0.5 bg-white/5 border border-white/10 rounded text-[9px]">Ctrl+Enter</kbd>
+                para rodar
+              </div>
             </div>
             <button 
               onClick={() => { setOutput(''); setReplHistory([]); }}
-              className="p-1.5 hover:bg-white/5 rounded-lg text-slate-500 hover:text-red-400 transition-all"
+              className="p-1.5 hover:bg-white/5 rounded-lg text-slate-500 hover:text-red-400 transition-all flex items-center gap-2 text-[10px] uppercase tracking-wider"
             >
-              <Trash2 className="w-4 h-4" />
+              <Trash2 className="w-3.5 h-3.5" />
+              <span className="hidden sm:inline">Limpar</span>
             </button>
           </div>
 
