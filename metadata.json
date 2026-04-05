@@ -1,0 +1,5 @@
+{
+  "name": "Haskell Edu Compiler",
+  "description": "Um compilador Haskell educacional e assistente de programação funcional para estudantes universitários, alimentado por IA.",
+  "requestFramePermissions": []
+}
